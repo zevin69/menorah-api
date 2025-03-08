@@ -8,7 +8,8 @@ import jwt from "jsonwebtoken";
 import nodemailer from "nodemailer";
 import passport from "passport";
 import { Strategy as GoogleStrategy } from "passport-google-oauth20";
-import articleRoute from "./routes/articleRoute.js"; // ✅ Correct import
+import session from "express-session";
+import articleRoute from "./routes/articleRoute.js";
 
 dotenv.config({ path: "./.env" });
 
@@ -20,16 +21,35 @@ if (!process.env.MONGO_URI) {
 console.log("✅ MONGO_URI Loaded:", process.env.MONGO_URI);
 
 const app = express();
-app.use(express.json()); // Middleware to parse JSON
 
 // ✅ Enable CORS
 app.use(cors({
-    origin: "*", // Allow requests from any origin (change this for security)
+    origin: "*", 
     methods: ["GET", "POST", "PUT", "DELETE"],
     allowedHeaders: ["Content-Type"]
 }));
 
-// PostgreSQL
+// ✅ Middleware Setup (SESSION FIRST)
+app.use(session({
+    secret: process.env.JWT_SECRET || "supersecret",
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: false,
+        httpOnly: true,
+        maxAge: 1000 * 60 * 60 * 24, 
+    }
+}));
+
+// ✅ Initialize Passport **AFTER** session setup
+app.use(passport.initialize());
+app.use(passport.session());
+
+// ✅ Parse JSON and URL-encoded requests
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ✅ PostgreSQL Connection
 const { Pool } = pkg;
 const pool = new Pool({
     user: "postgres",
@@ -39,24 +59,18 @@ const pool = new Pool({
     port: 5432,
 });
 
-export default pool;
+// Export pool properly
+export { pool };
 
-// MongoDB Connection
+// ✅ MongoDB Connection
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("✅ MongoDB connected!"))
     .catch(err => console.log("❌ MongoDB connection error:", err));
 
-// Use Routes
-app.use("/articles", articleRoute); // ✅ Use articles as the API path
+// ✅ Routes
+app.use("/articles", articleRoute);
 
-// Change the PORT to avoid conflicts
-const PORT = process.env.PORT || 5050; // Changed to 5050 to avoid conflicts
-
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
-// 🛑 Removed the second `app.listen(PORT, ... )` call
-
-// Nodemailer setup (for email verification)
+// ✅ Nodemailer Setup
 const transporter = nodemailer.createTransport({
     service: "gmail",
     auth: {
@@ -65,30 +79,20 @@ const transporter = nodemailer.createTransport({
     },
 });
 
-// Sign Up Route
+// ✅ Signup Route
 app.post("/signup", async (req, res) => {
     const { email, password } = req.body;
-
     try {
-        // Check if user already exists
         const userCheck = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
         if (userCheck.rows.length > 0) {
             return res.status(400).json({ message: "Email already registered" });
         }
 
-        // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
+        await pool.query("INSERT INTO users (email, password) VALUES ($1, $2)", [email, hashedPassword]);
 
-        // Insert user into DB
-        const newUser = await pool.query(
-            "INSERT INTO users (email, password) VALUES ($1, $2) RETURNING *",
-            [email, hashedPassword]
-        );
-
-        // Create verification token
         const token = jwt.sign({ email }, process.env.JWT_SECRET, { expiresIn: "1h" });
 
-        // Send verification email
         const verificationLink = `http://localhost:${PORT}/verify-email?token=${token}`;
         await transporter.sendMail({
             from: process.env.EMAIL_USER,
@@ -98,17 +102,15 @@ app.post("/signup", async (req, res) => {
         });
 
         res.status(201).json({ message: "User registered! Check your email to verify." });
-
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
 
-// Email Verification Route
+// ✅ Email Verification Route
 app.get("/verify-email", async (req, res) => {
     const { token } = req.query;
-
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         await pool.query("UPDATE users SET verified = TRUE WHERE email = $1", [decoded.email]);
@@ -118,14 +120,10 @@ app.get("/verify-email", async (req, res) => {
     }
 });
 
-// 🛑 Removed the duplicate `app.listen(PORT, () => {...})`
-
-// Login Route
+// ✅ Login Route
 app.post("/login", async (req, res) => {
     const { email, password } = req.body;
-
     try {
-        // Check if user exists
         const userResult = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
         if (userResult.rows.length === 0) {
             return res.status(400).json({ message: "Invalid email or password" });
@@ -133,55 +131,43 @@ app.post("/login", async (req, res) => {
 
         const user = userResult.rows[0];
 
-        // Check if email is verified
         if (!user.verified) {
             return res.status(400).json({ message: "Please verify your email first" });
         }
 
-        // Compare password
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(400).json({ message: "Invalid email or password" });
         }
 
-        // Generate JWT Token
         const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "24h" });
 
         res.json({ message: "Login successful", token });
-
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
 
-// Google Auth
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
-app.use(passport.initialize());
-app.use(passport.session());
-
-// Google Auth Strategy
+// ✅ Google Auth Strategy
 passport.use(new GoogleStrategy({
     clientID: process.env.GOOGLE_CLIENT_ID,
     clientSecret: process.env.GOOGLE_CLIENT_SECRET,
     callbackURL: "/auth/google/callback"
 }, async (accessToken, refreshToken, profile, done) => {
     const email = profile.emails[0].value;
-
     try {
         const userCheck = await pool.query("SELECT * FROM users WHERE email = $1", [email]);
-
         if (userCheck.rows.length === 0) {
             await pool.query("INSERT INTO users (email, verified) VALUES ($1, TRUE)", [email]);
         }
-
         return done(null, profile);
     } catch (error) {
         return done(error, null);
     }
 }));
 
+// ✅ Google Auth Routes
 app.get("/auth/google", passport.authenticate("google", { scope: ["profile", "email"] }));
 
 app.get("/auth/google/callback",
@@ -190,3 +176,7 @@ app.get("/auth/google/callback",
         res.send("Google login successful!");
     }
 );
+
+// ✅ Start Server
+const PORT = process.env.PORT || 5050;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
