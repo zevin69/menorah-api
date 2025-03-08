@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import cors from "cors";
 import articleRoute from "./routes/articleRoute.js";  // ✅ Correct import
 
 dotenv.config({ path: "./.env" });
@@ -15,11 +16,15 @@ console.log("✅ MONGO_URI Loaded:", process.env.MONGO_URI);
 const app = express();
 app.use(express.json());  // Middleware to parse JSON
 
+// ✅ Enable CORS
+app.use(cors({
+    origin: "*", // Allow requests from any origin (change this for security)
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    allowedHeaders: ["Content-Type"]
+}));
+
 // MongoDB Connection
-mongoose.connect(process.env.MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true
-})
+mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("✅ MongoDB connected!"))
     .catch(err => console.log("❌ MongoDB connection error:", err));
 
