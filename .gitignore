@@ -1,0 +1,11 @@
+# Ignore environment variables
+.env
+
+# Node modules (don't upload them)
+node_modules/
+
+# Log files
+*.log
+
+# Debugging files
+npm-debug.log*
