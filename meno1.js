@@ -13,31 +13,42 @@ import articleRoute from "./routes/articleRoute.js";
 
 dotenv.config({ path: "./.env" });
 
+const PORT = process.env.PORT || 5050;
+
+// ✅ Ensure required environment variables are set
 if (!process.env.MONGO_URI) {
     console.error("❌ MONGO_URI is undefined. Check your .env file.");
     process.exit(1);
 }
+if (!process.env.DATABASE_URL) {
+    console.error("❌ DATABASE_URL is undefined. Check your .env file.");
+    process.exit(1);
+}
 
 console.log("✅ MONGO_URI Loaded:", process.env.MONGO_URI);
+console.log("✅ DATABASE_URL Loaded");
 
+// ✅ Initialize Express App
 const app = express();
 
-// ✅ Enable CORS
+// ✅ Improved CORS Security
 app.use(cors({
-    origin: "*", 
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type"]
+    allowedHeaders: ["Content-Type", "Authorization"],
+    credentials: true
 }));
 
-// ✅ Middleware Setup (SESSION FIRST)
+// ✅ Secure Session Configuration
 app.use(session({
     secret: process.env.JWT_SECRET || "supersecret",
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: false,
+        secure: process.env.NODE_ENV === "production",
         httpOnly: true,
-        maxAge: 1000 * 60 * 60 * 24, 
+        sameSite: "lax",
+        maxAge: 1000 * 60 * 60 * 24,
     }
 }));
 
@@ -49,23 +60,40 @@ app.use(passport.session());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ PostgreSQL Connection
+// ✅ PostgreSQL Connection (Updated for Supabase & Local DB)
 const { Pool } = pkg;
-const pool = new Pool({
-    user: "postgres",
-    host: "localhost",
-    database: "menorah_users",
-    password: "027267@Appu",
-    port: 5432,
-});
 
-// Export pool properly
-export { pool };
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_SSL === "true" ? { rejectUnauthorized: false } : false
+});
 
 // ✅ MongoDB Connection
 mongoose.connect(process.env.MONGO_URI)
     .then(() => console.log("✅ MongoDB connected!"))
-    .catch(err => console.log("❌ MongoDB connection error:", err));
+    .catch(err => console.error("❌ MongoDB connection error:", err));
+
+// ✅ PostgreSQL Connection Test with Error Handling
+(async () => {
+    try {
+        const res = await pool.query("SELECT NOW()");
+        console.log("✅ PostgreSQL connected at:", res.rows[0].now);
+    } catch (err) {
+        console.error("❌ PostgreSQL connection error:", err);
+    }
+})();
+
+// ✅ Improved MongoDB Connection with Retry Logic
+const connectDB = async () => {
+    try {
+        await mongoose.connect(process.env.MONGO_URI);
+        console.log("✅ MongoDB connected!");
+    } catch (err) {
+        console.error("❌ MongoDB connection error:", err);
+        setTimeout(connectDB, 5000);
+    }
+};
+connectDB();
 
 // ✅ Routes
 app.use("/articles", articleRoute);
@@ -79,7 +107,7 @@ const transporter = nodemailer.createTransport({
     },
 });
 
-// ✅ Signup Route
+// ✅ Signup Route with Error Handling
 app.post("/signup", async (req, res) => {
     const { email, password } = req.body;
     try {
@@ -103,7 +131,7 @@ app.post("/signup", async (req, res) => {
 
         res.status(201).json({ message: "User registered! Check your email to verify." });
     } catch (error) {
-        console.error(error);
+        console.error("❌ Signup error:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
@@ -114,9 +142,9 @@ app.get("/verify-email", async (req, res) => {
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
         await pool.query("UPDATE users SET verified = TRUE WHERE email = $1", [decoded.email]);
-        res.send("Email verified! You can now log in.");
+        res.send("✅ Email verified! You can now log in.");
     } catch (error) {
-        res.status(400).send("Invalid or expired token.");
+        res.status(400).send("❌ Invalid or expired token.");
     }
 });
 
@@ -142,9 +170,9 @@ app.post("/login", async (req, res) => {
 
         const token = jwt.sign({ userId: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: "24h" });
 
-        res.json({ message: "Login successful", token });
+        res.json({ message: "✅ Login successful", token });
     } catch (error) {
-        console.error(error);
+        console.error("❌ Login error:", error);
         res.status(500).json({ message: "Internal server error" });
     }
 });
@@ -173,10 +201,29 @@ app.get("/auth/google", passport.authenticate("google", { scope: ["profile", "em
 app.get("/auth/google/callback",
     passport.authenticate("google", { failureRedirect: "/" }),
     (req, res) => {
-        res.send("Google login successful!");
+        res.send("✅ Google login successful!");
     }
 );
 
+// ✅ Gracefully Close PostgreSQL Connection on Shutdown
+process.on("SIGINT", async () => {
+    console.log("🔌 Closing PostgreSQL connection...");
+    await pool.end();
+    console.log("✅ PostgreSQL pool closed.");
+    process.exit(0);
+});
+
+process.on("SIGTERM", async () => {
+    console.log("🔌 Server shutting down...");
+    await pool.end();
+    console.log("✅ PostgreSQL pool closed.");
+    process.exit(0);
+});
+
+// Export pool properly
+export { pool };
+
 // ✅ Start Server
-const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+
+export default app;
