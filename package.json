@@ -4,7 +4,9 @@
   "main": "meno1.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node meno1.js",
+    "dev": "nodemon meno1.js"
   },
   "author": "",
   "license": "ISC",

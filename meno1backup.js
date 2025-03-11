@@ -102,7 +102,7 @@ app.post("/signup", async (req, res) => {
         const PORT = process.env.PORT || 5050;
 
 
-        const verificationLink = `http://${req.headers.host}/verify-email?token=${token}`;
+        const verificationLink = `http://localhost:${PORT}/verify-email?token=${token}`;
         await transporter.sendMail({
             from: process.env.EMAIL_USER,
             to: email,
